@@ -1,137 +1,118 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { Plugin, EventRef, TFile } from "obsidian";
 
-// Remember to rename these classes and interfaces!
-
-interface MyPluginSettings {
-	mySetting: string;
+declare module "obsidian" {
+  interface MetadataCache {
+    initialized: boolean;
+    initialize(): void;
+    fileCache: { [filePath: string]: { hash: string; mtime: number; size: number } };
+    uniqueFileLookup: { data: { [baseName: string]: TFile[] }; add(key: string, value: TFile): void };
+    metadataCache: { [hash: string]: CachedMetadata };
+    linkResolverQueue: { add(file: TFile): void };
+    getLinkSuggestions(): any[];
+  }
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
-}
+export default class RelBuilderPlugin extends Plugin {
+  private resolved: EventRef;
+  private resolve: EventRef;
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+  async onload() {
+    if (!this.app.metadataCache.initialized) {
+      this.resolved = this.app.metadataCache.on("resolved", () => {
+        this.app.metadataCache.offref(this.resolved);
+        console.log("Ephemeral cache has completed priming.");
+        // perform any logic that should only happen once the empheral cache has been primed
+      });
+    } else {
+      console.log("Plugin loaded after the ephemeral cache was primed.");
+      // Perform any logic that would be needed due to missing the initial cache priming
+      //
+      // In this case, we'll do a full refresh on the link resolver cache so that we can have
+      // a chance to act on all of the "resolve" events
+      this.refreshLinkResolverCache();
+    }
 
-	async onload() {
-		await this.loadSettings();
+    this.registerEvent(
+      // "resolve" is debounced by 2 seconds on any document change
+      this.resolve = this.app.metadataCache.on("resolve", srcFile => {
+        console.log("Ephemeral cache hase been updated for: " + srcFile.path);
+        const mdCache = this.app.metadataCache;
+        const cache = mdCache.getFileCache(srcFile);
+        let linkText = cache.frontmatter?.parent;
+        // handle the yaml parser turning wikilinks into nested arrays
+        // if we didn't receive an array, bail out
+        if (!(linkText instanceof Array)) return;
+        linkText = [...linkText].flat(2).pop();
+        // update the relevant link cache
+        this.incrementLinkRefCount(linkText, srcFile);
+        console.log("Parent Value: " + linkText);
+        console.log("Resolved Links: ", mdCache.resolvedLinks[srcFile.path]);
+        console.log("Unresolved Links: ", mdCache.unresolvedLinks[srcFile.path]);
+      })
+    );
+  }
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
+  onunload(): void {
+    // remove our resolve listener
+    this.app.metadataCache.offref(this.resolve);
+    // and refresh the cache so that our custom relationships are cleared out
+    this.refreshLinkResolverCache();
+  }
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
+  incrementLinkRefCount(linkText: string, srcFile: TFile) {
+    // borrowed most of this cache updating logic from @valentine195
+    // reference: https://github.com/valentine195/obsidian-admonition/blob/b9ee5e1c084446b65d9c011b8d4b34569bbf72af/src/main.ts#L885
+    //
+    // update the relevant link resolver cache based on whether or not the linkText resolves to an actual file
+    //2
+    const mdCache = this.app.metadataCache;
+    let file = mdCache.getFirstLinkpathDest(linkText, "");
+    let cache, path: string;
+    if (file && file instanceof TFile) {
+      cache = mdCache.resolvedLinks;
+      path = file.path;
+    } else {
+      cache = mdCache.unresolvedLinks;
+      path = linkText;
+    }
+    // initialize the source file key, if not found
+    if (!cache[srcFile.path]) {
+      cache[srcFile.path] = {
+        [path]: 0,
+      };
+    }
+    // initialize the target link key, if not found
+    let resolved = cache[srcFile.path];
+    if (!resolved[path]) {
+      resolved[path] = 0;
+    }
+    // increment the target link value
+    resolved[path] += 1;
+    cache[srcFile.path] = resolved;
+  }
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+  refreshLinkResolverCache = () => {
+    // This will force a refresh of the link resolver cache
+    // Logic was borrowed from the default Obsidian MetadataCache.initialize() method
+    const mdCache = this.app.metadataCache;
+    const metadataCache = mdCache.metadataCache;
+    const fileCache = mdCache.fileCache;
+    let markdownFiles: { [path: string]: TFile } = {};
+    let allLoadedFiles = this.app.vault.getAllLoadedFiles();
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-			}
-		});
+    for (let file of allLoadedFiles) {
+      if (file instanceof TFile) {
+        mdCache.uniqueFileLookup.add(file.name.toLowerCase(), file);
+        markdownFiles[file.path] = file;
+      }
+    }
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-	}
-
-	onunload() {
-
-	}
-
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-	}
-
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
-
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
-
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
-
-	display(): void {
-		const {containerEl} = this;
-
-		containerEl.empty();
-
-		containerEl.createEl('h2', {text: 'Settings for my awesome plugin.'});
-
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					console.log('Secret: ' + value);
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
-	}
+    for (let filePath in fileCache) {
+      const markdownFile = markdownFiles[filePath];
+      const cacheEntry = fileCache[filePath];
+      if (markdownFile && metadataCache.hasOwnProperty(cacheEntry.hash)) {
+        mdCache.linkResolverQueue.add(markdownFile);
+      }
+    }
+  };
 }
