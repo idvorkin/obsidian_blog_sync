@@ -1,6 +1,14 @@
-import { Plugin, EventRef, TFile } from "obsidian";
+import { link } from "fs";
+import {
+	Plugin,
+	EventRef,
+	TFile,
+	ReferenceCache,
+	MetadataCache,
+} from "obsidian";
 
 // While debugging, can access the object directly
+// app.plugins.plugins["obsidian-sample-plugin"].backlinks;
 
 declare module "obsidian" {
 	interface MetadataCache {
@@ -16,6 +24,7 @@ declare module "obsidian" {
 		metadataCache: { [hash: string]: CachedMetadata };
 		linkResolverQueue: { add(file: TFile): void };
 		getLinkSuggestions(): any[];
+		getLinks(): ReferenceCache[];
 	}
 }
 
@@ -93,6 +102,43 @@ export default class RelBuilderPlugin extends Plugin {
 						this.backlinks.markdown_map[urlName]
 					);
 				}
+
+				//  Now, for this file, lets update all the links
+
+				let links: [ReferenceCache] = (
+					app.metadataCache.getLinks() as any
+				)[srcFile.path];
+				console.log("links", links);
+				links.forEach((link) => {
+					if (link.link.startsWith("/")) {
+						console.log("Link To Replace", link.link);
+						let redirect = this.backlinks.redirects[link.link];
+						if (redirect) {
+							link.link =
+								this.backlinks.url_info[redirect].markdown_path;
+						} else {
+							console.log(
+								"Couldn't find a redirect",
+								link.link,
+								"X"
+							);
+							let direct_link =
+								this.backlinks.url_info[link.link];
+							if (direct_link) {
+								link.link =
+									this.backlinks.url_info[
+										link.link
+									].markdown_path;
+							} else {
+								console.log(
+									"Couldn't find a dirct link either",
+									link.link
+								);
+							}
+						}
+					}
+				});
+
 				const mdCache = this.app.metadataCache;
 				const cache = mdCache.getFileCache(srcFile);
 				let permalink = cache?.frontmatter?.permalink;
