@@ -38,6 +38,32 @@ export interface IURLInfoMap {
 	[key: string]: IURLInfo;
 }
 
+
+// Call this method inside your plugin's
+// `onload` function like so:
+// monkeyPatchConsole(this);
+const monkeyPatchConsole = (plugin: Plugin) => {
+    if (!Platform.isMobile) {
+        return;
+    }
+
+    const logFile = `${plugin.manifest.dir}/logs.txt`;
+    const logs: string[] = [];
+    const logMessages = (prefix: string) => (...messages: unknown[]) => {
+        logs.push(`\n[${prefix}]`);
+        for (const message of messages) {
+            logs.push(String(message));
+        }
+        plugin.app.vault.adapter.write(logFile, logs.join(" "));
+    };
+
+    console.debug = logMessages("debug");
+    console.error = logMessages("error");
+    console.info = logMessages("info");
+    console.log = logMessages("log");
+    console.warn = logMessages("warn");
+};
+
 export interface IURLInfo {
 	url: string;
 	title: string;
@@ -56,6 +82,7 @@ export default class RelBuilderPlugin extends Plugin {
 	private backlinks: IBacklinks;
 
 	async onload() {
+        monkeyPatchConsole(this)
 		if (!this.app.metadataCache.initialized) {
 			this.resolved = this.app.metadataCache.on("resolved", () => {
 				this.app.metadataCache.offref(this.resolved);
