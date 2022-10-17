@@ -89,6 +89,17 @@ export default class RelBuilderPlugin extends Plugin {
 			// Not part of blog just return
 			return;
 		}
+
+		// Only fix up posts and drafts and td
+		let interesting =
+			urlName.startsWith("_posts") ||
+			urlName.startsWith("_d") ||
+			urlName.startsWith("_td");
+		if (!interesting) {
+			// Not part of blog just return
+			return;
+		}
+
 		console.log("Fixing up:", urlName);
 
 		//  Now, for this file, lets update all the links
@@ -123,8 +134,10 @@ export default class RelBuilderPlugin extends Plugin {
 
 		const mdCache = this.app.metadataCache;
 		const cache = mdCache.getFileCache(srcFile);
-		let permalink = cache?.frontmatter?.permalink;
-		console.log(permalink);
+
+		// TODO: Future permalinks in the future.
+		//let permalink = cache?.frontmatter?.permalink;
+		// console.log(permalink);
 		// update the relevant link cache
 		console.log("Resolved Links: ", mdCache.resolvedLinks[srcFile.path]);
 		console.log(
@@ -133,27 +146,29 @@ export default class RelBuilderPlugin extends Plugin {
 		);
 	}
 
-	async onload() {
-		// monkeyPatchConsole(this) -
-		if (!this.app.metadataCache.initialized) {
-			this.resolved = this.app.metadataCache.on("resolved", () => {
-				this.app.metadataCache.offref(this.resolved);
-				console.log("Ephemeral cache has completed priming.");
-				// perform any logic that should only happen once the empheral cache has been primed
-			});
-		} else {
-			console.log(
-				"Plugin loaded after the ephemeral cache was primed a ."
-			);
-			// Perform any logic that would be needed due to missing the initial cache priming
-			//
-			// In this case, we'll do a full refresh on the link resolver cache so that we can have
-			// a chance to act on all of the "resolve" events
-			this.rebuildAllLinks();
-		}
+	async registerPluginCallbacks() {
+		this.addCommand({
+			id: "rebuild-links",
+			name: "Rebuild Links",
+			callback: () => {
+				console.log("Running Rebuild!");
+				this.rebuildAllLinks();
+			},
+		});
 
-		// HACK - Hard code in from backlinks which are uploaded by an external python scrips
-		// But hey, gotta start somewhere.
+		// console.log(this.backlinks.url_info);
+		// console.log(this.backlinks.redirects);
+
+		// TODO: What does register event do?
+		this.registerEvent(
+			// "resolve" is debounced by 2 seconds on any document change
+			(this.resolve = this.app.metadataCache.on("resolve", (srcFile) => {
+				this.fixup_links(srcFile);
+			}))
+		);
+	}
+
+	async buildBacklinks() {
 		let backlinks_ref = await app.vault
 			.getFiles()
 			.filter((file) => file.path == "oblog/back-links.json")[0];
@@ -165,24 +180,43 @@ export default class RelBuilderPlugin extends Plugin {
 			const [key, value] = entry;
 			this.backlinks.markdown_map[value.markdown_path] = value;
 		});
+		console.log("Onload-> Backlinks loaded");
+	}
 
-		console.log(this.backlinks.url_info);
-		// console.log(this.backlinks.redirects);
+	async onload() {
+		// HACK - Hard code in from backlinks which are uploaded by an external python scrips
+		// But hey, gotta start somewhere.
+		console.log("Onload++");
 
-		this.registerEvent(
-			// "resolve" is debounced by 2 seconds on any document change
-			(this.resolve = this.app.metadataCache.on("resolve", (srcFile) => {
-				this.fixup_links(srcFile);
-			}))
-		);
-		this.addCommand({
-			id: "rebuild-links",
-			name: "Rebuild Jekyll Links",
-			callback: () => {
-				console.log("Running Rebuild!");
-				this.rebuildAllLinks();
-			},
-		});
+		let startupLoad = false;
+		// Sleep till cache initialized ...
+		while (!this.app.metadataCache.initialized) {
+			startupLoad = true;
+			// Wait 10 seconds to allow initalization
+			const seconds_to_wait = 1;
+			console.log("Onload-> Sleep++");
+			await sleep(seconds_to_wait * 1000);
+			console.log("Onload-> Sleep--");
+		}
+		await this.registerPluginCallbacks();
+		console.log("Onload->Callbacks loaded ");
+
+		if (startupLoad) {
+			const seconds_to_wait = 4;
+			console.log("Onload-> FirstLoad Sleep++");
+			await sleep(seconds_to_wait * 1000);
+			console.log("Onload-> FirstLoadSleep--");
+		}
+		// Maybe can reload backlinks with a different command later ..
+		await this.buildBacklinks();
+		await this.rebuildAllLinks();
+		console.log("Onload--");
+
+		// Start Execution
+
+		// monkeyPatchConsole(this) -
+
+		// Maybe just wait 10 seconds if not loaded yet ...
 	}
 
 	onunload(): void {
