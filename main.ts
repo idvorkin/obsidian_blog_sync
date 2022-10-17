@@ -81,8 +81,70 @@ export default class RelBuilderPlugin extends Plugin {
 	private resolve: EventRef;
 	private backlinks: IBacklinks;
 
+    fixup_links(srcFile) {
+        const filePath = srcFile.path;
+        let urlName = filePath.split("oblog/")[1];
+        // 	 console.log("Cache Changed", filePath, urlName);
+        if (this.backlinks.markdown_map[urlName]) {
+            console.log(
+                "backlinks",
+                this.backlinks.markdown_map[urlName]
+            );
+        }
+
+        //  Now, for this file, lets update all the links
+
+        let links: [ReferenceCache] = (
+            app.metadataCache.getLinks() as any
+        )[srcFile.path];
+        console.log("links", links);
+        links.forEach((link) => {
+            if (link.link.startsWith("/")) {
+                console.log("Link To Replace", link.link);
+                let redirect = this.backlinks.redirects[link.link];
+                if (redirect) {
+                    link.link =
+                        this.backlinks.url_info[redirect].markdown_path;
+                } else {
+                    console.log(
+                        "Couldn't find a redirect",
+                        link.link,
+                        "X"
+                    );
+                    let direct_link =
+                        this.backlinks.url_info[link.link];
+                    if (direct_link) {
+                        link.link =
+                            this.backlinks.url_info[
+                            link.link
+                        ].markdown_path;
+                    } else {
+                        console.log(
+                            "Couldn't find a dirct link either",
+                            link.link
+                        );
+                    }
+                }
+            }
+        });
+
+        const mdCache = this.app.metadataCache;
+        const cache = mdCache.getFileCache(srcFile);
+        let permalink = cache?.frontmatter?.permalink;
+        console.log(permalink);
+        // update the relevant link cache
+        console.log(
+            "Resolved Links: ",
+            mdCache.resolvedLinks[srcFile.path]
+        );
+        console.log(
+            "Unresolved Links: ",
+            mdCache.unresolvedLinks[srcFile.path]
+        );
+    }
+
 	async onload() {
-        monkeyPatchConsole(this)
+        // monkeyPatchConsole(this)
 		if (!this.app.metadataCache.initialized) {
 			this.resolved = this.app.metadataCache.on("resolved", () => {
 				this.app.metadataCache.offref(this.resolved);
@@ -119,68 +181,8 @@ export default class RelBuilderPlugin extends Plugin {
 
 		this.registerEvent(
 			// "resolve" is debounced by 2 seconds on any document change
-			(this.resolve = this.app.metadataCache.on("resolve", (srcFile) => {
-				const filePath = srcFile.path;
-				let urlName = filePath.split("oblog/")[1];
-				// 	 console.log("Cache Changed", filePath, urlName);
-				if (this.backlinks.markdown_map[urlName]) {
-					console.log(
-						"backlinks",
-						this.backlinks.markdown_map[urlName]
-					);
-				}
-
-				//  Now, for this file, lets update all the links
-
-				let links: [ReferenceCache] = (
-					app.metadataCache.getLinks() as any
-				)[srcFile.path];
-				console.log("links", links);
-				links.forEach((link) => {
-					if (link.link.startsWith("/")) {
-						console.log("Link To Replace", link.link);
-						let redirect = this.backlinks.redirects[link.link];
-						if (redirect) {
-							link.link =
-								this.backlinks.url_info[redirect].markdown_path;
-						} else {
-							console.log(
-								"Couldn't find a redirect",
-								link.link,
-								"X"
-							);
-							let direct_link =
-								this.backlinks.url_info[link.link];
-							if (direct_link) {
-								link.link =
-									this.backlinks.url_info[
-										link.link
-									].markdown_path;
-							} else {
-								console.log(
-									"Couldn't find a dirct link either",
-									link.link
-								);
-							}
-						}
-					}
-				});
-
-				const mdCache = this.app.metadataCache;
-				const cache = mdCache.getFileCache(srcFile);
-				let permalink = cache?.frontmatter?.permalink;
-				console.log(permalink);
-				// update the relevant link cache
-				console.log(
-					"Resolved Links: ",
-					mdCache.resolvedLinks[srcFile.path]
-				);
-				console.log(
-					"Unresolved Links: ",
-					mdCache.unresolvedLinks[srcFile.path]
-				);
-			}))
-		);
+			this.resolve = this.app.metadataCache.on("resolve", (srcFile) => {this.fixup_links(srcFile)})
+        )
 	}
 
 	onunload(): void {
