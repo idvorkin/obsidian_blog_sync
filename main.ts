@@ -10,6 +10,7 @@ import {
 
 // While debugging, can access the object directly
 // app.plugins.plugins["obsidian-sample-plugin"].backlinks;
+// I'm not sure what I get with the second reloads...
 
 declare module "obsidian" {
 	interface MetadataCache {
@@ -43,11 +44,7 @@ export interface IURLInfoMap {
 // `onload` function like so:
 // monkeyPatchConsole(this);
 const monkeyPatchConsole = (plugin: Plugin) => {
-	/*
-	if (!Platform.isMobile) {
-		return;
-	}
-  */
+	//	if (this.Platform.isMobile) { return; }
 
 	const logFile = `${plugin.manifest.dir}/logs.txt`;
 	const logs: string[] = [];
@@ -152,7 +149,7 @@ export default class RelBuilderPlugin extends Plugin {
 			//
 			// In this case, we'll do a full refresh on the link resolver cache so that we can have
 			// a chance to act on all of the "resolve" events
-			this.refreshLinkResolverCache();
+			this.rebuildAllLinks();
 		}
 
 		// HACK - Hard code in from backlinks which are uploaded by an external python scrips
@@ -178,13 +175,21 @@ export default class RelBuilderPlugin extends Plugin {
 				this.fixup_links(srcFile);
 			}))
 		);
+		this.addCommand({
+			id: "rebuild-links",
+			name: "Rebuild Jekyll Links",
+			callback: () => {
+				console.log("Running Rebuild!");
+				this.rebuildAllLinks();
+			},
+		});
 	}
 
 	onunload(): void {
 		// remove our resolve listener
 		this.app.metadataCache.offref(this.resolve);
 		// and refresh the cache so that our custom relationships are cleared out
-		this.refreshLinkResolverCache();
+		this.rebuildAllLinks();
 	}
 
 	incrementLinkRefCount(linkText: string, srcFile: TFile) {
@@ -220,7 +225,7 @@ export default class RelBuilderPlugin extends Plugin {
 		cache[srcFile.path] = resolved;
 	}
 
-	refreshLinkResolverCache = () => {
+	rebuildAllLinks = () => {
 		// This will force a refresh of the link resolver cache
 		// Logic was borrowed from the default Obsidian MetadataCache.initialize() method
 		const mdCache = this.app.metadataCache;
